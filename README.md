@@ -1,4 +1,5 @@
 # Agent Service Boilerplate
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/ef233f0a-79d7-4a76-a354-ecc483cbd831" />
 
 > **Turn your AI agents into production-ready microservices in minutes, not months.**
 
