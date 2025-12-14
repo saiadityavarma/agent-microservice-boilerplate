@@ -1,0 +1,144 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+default_language_version:
+  python: python3.11
+
+exclude: |
+  (?x)^(
+      .*\.pyc|
+      .*\.pyo|
+      .*\.egg-info/.*|
+      .*/__pycache__/.*|
+      .*/\.venv/.*|
+      .*/venv/.*|
+      .*/\.pytest_cache/.*|
+      .*/\.mypy_cache/.*|
+      .*/\.ruff_cache/.*|
+      .*\.min\.js|
+      .*\.min\.css
+  )$
+
+repos:
+  # Ruff - Python linter and formatter (replaces Black, isort, flake8, etc.)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      # Run the formatter
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # Mypy - Static type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports, --python-version=3.11]
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+        exclude: |
+          (?x)^(
+              tests/.*|
+              .*/migrations/.*
+          )$
+
+  # Bandit - Security vulnerability scanning
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml, -r]
+        additional_dependencies: ["bandit[toml]"]
+        exclude: |
+          (?x)^(
+              tests/.*
+          )$
+
+  # Detect-secrets - Prevent secrets from being committed
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+              .*\.lock|
+              package-lock\.json|
+              poetry\.lock|
+              .*\.svg
+          )$
+
+  # Pre-commit hooks for general file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: |
+          (?x)^(
+              .*\.snap|
+              .*\.min\..*
+          )$
+
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+        exclude: |
+          (?x)^(
+              .*\.snap|
+              .*\.min\..*
+          )$
+
+      # Validate YAML files
+      - id: check-yaml
+        args: [--safe]
+        exclude: |
+          (?x)^(
+              .*\.template\.ya?ml
+          )$
+
+      # Validate JSON files
+      - id: check-json
+        exclude: |
+          (?x)^(
+              .*\.template\.json|
+              \.vscode/.*\.json
+          )$
+
+      # Validate TOML files
+      - id: check-toml
+
+      # Check for files that would conflict in case-insensitive filesystems
+      - id: check-case-conflict
+
+      # Check for merge conflicts
+      - id: check-merge-conflict
+
+      # Check for debugger imports and breakpoints
+      - id: debug-statements
+
+      # Prevent large files from being committed
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+
+      # Check for mixed line endings
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+# Configuration for CI
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

@@ -1,0 +1,39 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent-service.fullname" . }}
+  labels:
+    {{- include "agent-service.apiLabels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "agent-service.apiSelectorLabels" . | nindent 4 }}
+{{- end }}
+---
+{{- if .Values.flower.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent-service.fullname" . }}-flower
+  labels:
+    {{- include "agent-service.flowerLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.flower.service.type }}
+  ports:
+    - port: {{ .Values.flower.service.port }}
+      targetPort: 5555
+      protocol: TCP
+      name: flower
+  selector:
+    {{- include "agent-service.flowerSelectorLabels" . | nindent 4 }}
+{{- end }}

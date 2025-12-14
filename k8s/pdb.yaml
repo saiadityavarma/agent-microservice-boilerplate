@@ -1,0 +1,52 @@
+# k8s/pdb.yaml
+# Pod Disruption Budget ensures high availability during voluntary disruptions
+# (node drains, upgrades, etc.)
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-service-api-pdb
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: api
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: pdb
+spec:
+  # Ensure at least 1 pod is always available during disruptions
+  minAvailable: 1
+
+  # Alternative: Use maxUnavailable instead
+  # maxUnavailable: 1
+
+  selector:
+    matchLabels:
+      app: agent-service
+      component: api
+
+  # Unhealthy pod eviction policy
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+---
+# PDB for Celery workers
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-service-worker-pdb
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: worker
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: worker-pdb
+spec:
+  # Allow up to 50% of worker pods to be unavailable
+  # This allows faster draining while maintaining capacity
+  maxUnavailable: 50%
+
+  selector:
+    matchLabels:
+      app: agent-service
+      component: worker
+
+  unhealthyPodEvictionPolicy: IfHealthyBudget

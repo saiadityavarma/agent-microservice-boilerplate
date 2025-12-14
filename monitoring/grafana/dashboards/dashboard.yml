@@ -1,0 +1,16 @@
+# monitoring/grafana/dashboards/dashboard.yml
+# Dashboard provisioning configuration
+
+apiVersion: 1
+
+providers:
+  - name: 'Agent Service Dashboards'
+    orgId: 1
+    folder: 'Agent Service'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

@@ -1,0 +1,124 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Egg files
+.eggs/
+*.egg-info/
+*.egg
+.installed.cfg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+
+# Testing
+tests/
+test/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.cover
+*.log
+nosetests.xml
+coverage.xml
+*.mo
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+azure-pipelines.yml
+Jenkinsfile
+
+# Local config files
+.env
+.env.*
+.envrc
+*.local
+.env.local
+.env.*.local
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.manifest
+
+# Docker related (meta)
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+.docker/
+
+# Kubernetes and Helm
+k8s/
+kubernetes/
+helm/
+*.yaml
+*.yml
+!requirements.yml
+
+# Development tools
+Makefile
+Makefile.*
+.editorconfig
+.pre-commit-config.yaml
+
+# Misc
+*.log
+*.pot
+*.tmp
+temp/
+tmp/
+.cache/
+*.bak
+*.orig
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+celerybeat-schedule
+celerybeat.pid
+*.sage.py

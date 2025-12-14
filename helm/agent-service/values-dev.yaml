@@ -1,0 +1,104 @@
+# Development environment values
+global:
+  environment: development
+  domain: dev.example.com
+
+image:
+  tag: "latest"
+  pullPolicy: Always
+
+api:
+  replicaCount: 1
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: false
+
+worker:
+  replicaCount: 1
+  concurrency: 2
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: false
+
+beat:
+  enabled: true
+
+flower:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: api-dev.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: agent-service-dev-tls
+      hosts:
+        - api-dev.example.com
+
+configMap:
+  data:
+    APP_NAME: "agent-service-dev"
+    LOG_LEVEL: "DEBUG"
+    TRACING_SAMPLE_RATE: "1.0"
+    CORS_ORIGINS: '["*"]'
+
+secret:
+  enabled: true
+  useExisting: false
+  data:
+    DATABASE_URL: "postgresql://devuser:devpass@postgres-dev:5432/agentdb"
+    REDIS_URL: "redis://redis-dev:6379/0"
+    CELERY_BROKER_URL: "redis://redis-dev:6379/0"
+    CELERY_RESULT_BACKEND: "redis://redis-dev:6379/1"
+    SECRET_KEY: "dev-secret-key-change-me"
+
+podDisruptionBudget:
+  enabled: false
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+
+persistence:
+  enabled: false
+
+migration:
+  enabled: true
+  hook:
+    enabled: true
+
+# Enable dependencies for dev
+redis:
+  enabled: true
+  auth:
+    password: "devredis"
+
+postgresql:
+  enabled: true
+  auth:
+    username: devuser
+    password: "devpass"
+    database: agentdb

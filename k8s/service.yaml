@@ -1,0 +1,33 @@
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-service-api
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: api
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: api
+  annotations:
+    description: "ClusterIP service for AI Agent Service API"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  sessionAffinity: None
+  selector:
+    app: agent-service
+    component: api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
+    - name: metrics
+      protocol: TCP
+      port: 9090
+      targetPort: http
+  # Internal traffic policy for better performance within cluster
+  internalTrafficPolicy: Cluster

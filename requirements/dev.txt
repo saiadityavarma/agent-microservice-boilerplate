@@ -1,0 +1,8 @@
+# Development dependencies - includes base + dev extras
+# Install with: pip install -e ".[dev]"
+# Or install from this file: pip install -r requirements/dev.txt
+
+-r base.txt
+
+# Development extras from pyproject.toml
+-e .[dev]

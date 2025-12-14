@@ -1,0 +1,12 @@
+# Production dependencies - includes base + production optimizations
+# Install with: pip install -e ".[otel]"
+# Or install from this file: pip install -r requirements/prod.txt
+
+-r base.txt
+
+# Production optimizations
+-e .[otel]
+
+# Production-specific packages
+gunicorn>=21.2.0  # Production WSGI server (alternative to uvicorn)
+gevent>=23.9.0  # Async support for gunicorn

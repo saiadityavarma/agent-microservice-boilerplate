@@ -1,0 +1,558 @@
+name: Security Scanning
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen
+
+      - name: Run pip-audit
+        id: pip-audit
+        run: |
+          uv pip install pip-audit
+          uv run pip-audit --format json --output pip-audit-results.json || echo "VULNERABILITIES_FOUND=true" >> $GITHUB_ENV
+        continue-on-error: true
+
+      - name: Convert pip-audit results to SARIF
+        if: always()
+        run: |
+          uv pip install sarif-tools
+          if [ -f pip-audit-results.json ]; then
+            python3 << 'EOF'
+          import json
+          import os
+
+          # Read pip-audit results
+          with open('pip-audit-results.json', 'r') as f:
+              audit_data = json.load(f)
+
+          # Convert to SARIF format
+          sarif = {
+              "version": "2.1.0",
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "runs": [{
+                  "tool": {
+                      "driver": {
+                          "name": "pip-audit",
+                          "informationUri": "https://github.com/pypa/pip-audit",
+                          "version": "1.0.0"
+                      }
+                  },
+                  "results": []
+              }]
+          }
+
+          # Process vulnerabilities
+          for vuln in audit_data.get('vulnerabilities', []):
+              package = vuln.get('name', 'unknown')
+              version = vuln.get('version', 'unknown')
+              vuln_id = vuln.get('id', 'unknown')
+              description = vuln.get('description', 'No description available')
+              severity = vuln.get('fix_versions', [{}])[0].get('severity', 'warning')
+
+              # Map severity to SARIF level
+              level_map = {
+                  'critical': 'error',
+                  'high': 'error',
+                  'medium': 'warning',
+                  'low': 'note',
+                  'warning': 'warning'
+              }
+              level = level_map.get(severity.lower(), 'warning')
+
+              result = {
+                  "ruleId": vuln_id,
+                  "level": level,
+                  "message": {
+                      "text": f"Vulnerable dependency: {package}@{version} - {description}"
+                  },
+                  "locations": [{
+                      "physicalLocation": {
+                          "artifactLocation": {
+                              "uri": "pyproject.toml"
+                          }
+                      }
+                  }]
+              }
+              sarif["runs"][0]["results"].append(result)
+
+          # Write SARIF file
+          with open('dependency-scan.sarif', 'w') as f:
+              json.dump(sarif, f, indent=2)
+          EOF
+          fi
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dependency-scan.sarif
+          category: dependency-scan
+
+      - name: Check for critical/high vulnerabilities
+        if: always()
+        run: |
+          if [ -f pip-audit-results.json ]; then
+            python3 << 'EOF'
+          import json
+          import sys
+
+          with open('pip-audit-results.json', 'r') as f:
+              data = json.load(f)
+
+          critical_high = [v for v in data.get('vulnerabilities', [])
+                          if v.get('fix_versions', [{}])[0].get('severity', '').lower() in ['critical', 'high']]
+
+          if critical_high:
+              print(f"Found {len(critical_high)} critical/high severity vulnerabilities!")
+              for vuln in critical_high:
+                  print(f"  - {vuln.get('name')}@{vuln.get('version')}: {vuln.get('id')}")
+              sys.exit(1)
+          EOF
+          fi
+
+      - name: Create issue for vulnerabilities
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let vulnerabilities = [];
+
+            try {
+              const auditData = JSON.parse(fs.readFileSync('pip-audit-results.json', 'utf8'));
+              vulnerabilities = auditData.vulnerabilities || [];
+            } catch (error) {
+              console.log('No vulnerabilities file found');
+              return;
+            }
+
+            const criticalHigh = vulnerabilities.filter(v =>
+              ['critical', 'high'].includes(v.fix_versions?.[0]?.severity?.toLowerCase())
+            );
+
+            if (criticalHigh.length === 0) return;
+
+            const body = `## Critical/High Severity Vulnerabilities Detected
+
+            The security scan found ${criticalHigh.length} critical or high severity vulnerabilities in dependencies:
+
+            ${criticalHigh.map(v => `### ${v.name}@${v.version}
+            - **Vulnerability ID**: ${v.id}
+            - **Severity**: ${v.fix_versions?.[0]?.severity || 'Unknown'}
+            - **Description**: ${v.description || 'No description'}
+            - **Fix Available**: ${v.fix_versions?.[0]?.version || 'See advisory'}
+            `).join('\n')}
+
+            **Action Required**: Update affected dependencies to remediate these vulnerabilities.
+
+            Workflow: [${context.workflow}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Security Alert: ${criticalHigh.length} Critical/High Vulnerabilities Found`,
+              body: body,
+              labels: ['security', 'vulnerability', 'automated']
+            });
+
+  container-scan:
+    name: Container Image Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t agent-service:security-scan -f docker/Dockerfile --target prod .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'agent-service:security-scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '0'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: container-scan
+
+      - name: Check for critical/high vulnerabilities
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image --severity CRITICAL,HIGH \
+            --exit-code 1 agent-service:security-scan
+
+      - name: Create issue for container vulnerabilities
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## Container Security Vulnerabilities Detected
+
+            The Trivy container scan found critical or high severity vulnerabilities in the Docker image.
+
+            **Image**: agent-service:security-scan
+
+            **Action Required**:
+            1. Review the Security tab for detailed vulnerability information
+            2. Update base image or dependencies as needed
+            3. Rebuild and rescan the container
+
+            Workflow: [${context.workflow}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Security Alert: Container Vulnerabilities Found',
+              body: body,
+              labels: ['security', 'container', 'automated']
+            });
+
+  sast:
+    name: Static Application Security Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bandit
+        run: |
+          pip install bandit[sarif]
+
+      - name: Run bandit security linter
+        run: |
+          bandit -r src/ -f sarif -o bandit-results.sarif --severity-level medium --exit-zero
+        continue-on-error: true
+
+      - name: Upload bandit results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+          category: sast
+
+      - name: Run bandit with strict checking
+        run: |
+          bandit -r src/ -f json -o bandit-results.json --severity-level high --confidence-level high
+
+      - name: Check for critical/high severity issues
+        if: always()
+        run: |
+          if [ -f bandit-results.json ]; then
+            python3 << 'EOF'
+          import json
+          import sys
+
+          with open('bandit-results.json', 'r') as f:
+              data = json.load(f)
+
+          high_issues = [r for r in data.get('results', [])
+                        if r.get('issue_severity', '').upper() in ['HIGH', 'CRITICAL']]
+
+          if high_issues:
+              print(f"Found {len(high_issues)} high/critical severity security issues!")
+              for issue in high_issues:
+                  print(f"  - {issue.get('test_id')}: {issue.get('issue_text')} ({issue.get('filename')}:{issue.get('line_number')})")
+              sys.exit(1)
+          EOF
+          fi
+
+      - name: Create issue for SAST findings
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let issues = [];
+
+            try {
+              const banditData = JSON.parse(fs.readFileSync('bandit-results.json', 'utf8'));
+              issues = banditData.results || [];
+            } catch (error) {
+              console.log('No SAST results file found');
+              return;
+            }
+
+            const highIssues = issues.filter(i =>
+              ['HIGH', 'CRITICAL'].includes(i.issue_severity?.toUpperCase())
+            );
+
+            if (highIssues.length === 0) return;
+
+            const body = `## SAST Security Issues Detected
+
+            Bandit found ${highIssues.length} high/critical severity security issues in the codebase:
+
+            ${highIssues.slice(0, 10).map(i => `### ${i.test_id}: ${i.test_name}
+            - **File**: \`${i.filename}:${i.line_number}\`
+            - **Severity**: ${i.issue_severity}
+            - **Confidence**: ${i.issue_confidence}
+            - **Issue**: ${i.issue_text}
+            - **Code**:
+            \`\`\`python
+            ${i.code}
+            \`\`\`
+            `).join('\n')}
+
+            ${highIssues.length > 10 ? `\n*...and ${highIssues.length - 10} more issues. Check the Security tab for full details.*\n` : ''}
+
+            **Action Required**: Review and remediate these security issues.
+
+            Workflow: [${context.workflow}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Security Alert: ${highIssues.length} SAST Issues Found`,
+              body: body,
+              labels: ['security', 'sast', 'automated']
+            });
+
+  secrets-scan:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for secret scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: true
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Create issue for secrets found
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## Secrets Detected in Repository
+
+            The secrets scanning workflow detected potential secrets or sensitive data in the repository.
+
+            **Scanners**: Gitleaks and TruffleHog
+
+            **Action Required**:
+            1. Review the workflow logs for details
+            2. Rotate any exposed credentials immediately
+            3. Remove secrets from git history if needed
+            4. Use environment variables or secret management solutions
+
+            :warning: **CRITICAL**: If valid credentials were exposed, rotate them immediately!
+
+            Workflow: [${context.workflow}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Security Alert: Secrets Detected in Repository',
+              body: body,
+              labels: ['security', 'secrets', 'critical', 'automated']
+            });
+
+  license-check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv and dependencies
+        run: |
+          pip install uv
+          uv sync --frozen
+
+      - name: Install pip-licenses
+        run: |
+          uv pip install pip-licenses
+
+      - name: Check licenses
+        id: license-check
+        run: |
+          # Generate license report
+          uv run pip-licenses --format=json --output-file=licenses.json
+
+          # Check for incompatible licenses
+          uv run pip-licenses --format=markdown --output-file=licenses.md
+
+          # Define prohibited licenses (customize based on your needs)
+          PROHIBITED_LICENSES="GPL-3.0,AGPL-3.0,SSPL-1.0"
+
+          python3 << 'EOF'
+          import json
+          import sys
+
+          prohibited = ["GPL-3.0", "AGPL-3.0", "SSPL-1.0", "BUSL-1.1"]
+
+          with open('licenses.json', 'r') as f:
+              licenses = json.load(f)
+
+          issues = []
+          for pkg in licenses:
+              license_name = pkg.get('License', 'UNKNOWN')
+              if any(p in license_name for p in prohibited):
+                  issues.append(f"{pkg.get('Name')}@{pkg.get('Version')}: {license_name}")
+
+          if issues:
+              print("Found packages with prohibited licenses:")
+              for issue in issues:
+                  print(f"  - {issue}")
+              with open('license-issues.txt', 'w') as f:
+                  f.write('\n'.join(issues))
+              sys.exit(1)
+          else:
+              print("All licenses are compliant!")
+          EOF
+
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: |
+            licenses.json
+            licenses.md
+
+      - name: Create issue for license violations
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let issues = '';
+
+            try {
+              issues = fs.readFileSync('license-issues.txt', 'utf8');
+            } catch (error) {
+              console.log('No license issues file found');
+              return;
+            }
+
+            const body = `## License Compliance Violations Detected
+
+            The license check found dependencies with prohibited or incompatible licenses:
+
+            \`\`\`
+            ${issues}
+            \`\`\`
+
+            **Prohibited Licenses**: GPL-3.0, AGPL-3.0, SSPL-1.0, BUSL-1.1
+
+            **Action Required**:
+            1. Review the affected dependencies
+            2. Find alternative packages with compatible licenses
+            3. Obtain legal approval if these licenses are acceptable for your use case
+            4. Update the prohibited license list if needed
+
+            See the workflow artifacts for the full license report.
+
+            Workflow: [${context.workflow}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'License Compliance: Prohibited Licenses Detected',
+              body: body,
+              labels: ['license', 'compliance', 'automated']
+            });
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, container-scan, sast, secrets-scan, license-check]
+    if: always()
+    steps:
+      - name: Generate security summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = [
+              { name: 'Dependency Scan', status: '${{ needs.dependency-scan.result }}' },
+              { name: 'Container Scan', status: '${{ needs.container-scan.result }}' },
+              { name: 'SAST', status: '${{ needs.sast.result }}' },
+              { name: 'Secrets Scan', status: '${{ needs.secrets-scan.result }}' },
+              { name: 'License Check', status: '${{ needs.license-check.result }}' }
+            ];
+
+            const statusEmoji = {
+              'success': '✅',
+              'failure': '❌',
+              'cancelled': '⚠️',
+              'skipped': '⏭️'
+            };
+
+            const summary = `## Security Scan Summary
+
+            | Check | Status |
+            |-------|--------|
+            ${jobs.map(j => `| ${j.name} | ${statusEmoji[j.status] || '❓'} ${j.status} |`).join('\n')}
+
+            ${jobs.filter(j => j.status === 'failure').length > 0 ?
+              '⚠️ **Action Required**: One or more security checks failed. Review the details above and check the Security tab.' :
+              '✅ All security checks passed!'}
+            `;
+
+            core.summary.addRaw(summary).write();

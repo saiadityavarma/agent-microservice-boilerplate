@@ -1,0 +1,6 @@
+# Base dependencies - references pyproject.toml
+# Install with: pip install -e .
+# Or install from this file directly: pip install -r requirements/base.txt
+
+# This file references the project's base dependencies from pyproject.toml
+-e .

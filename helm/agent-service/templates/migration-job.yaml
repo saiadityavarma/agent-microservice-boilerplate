@@ -1,0 +1,58 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "agent-service.fullname" . }}-migration-{{ .Release.Revision }}
+  labels:
+    {{- include "agent-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  {{- if .Values.migration.hook.enabled }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": {{ .Values.migration.hook.weight | quote }}
+    "helm.sh/hook-delete-policy": {{ .Values.migration.hook.deletePolicy }}
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "agent-service.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      {{- include "agent-service.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "agent-service.serviceAccountName" . }}
+      restartPolicy: OnFailure
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: migration
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: {{ include "agent-service.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - alembic
+          - upgrade
+          - head
+        resources:
+          {{- toYaml .Values.migration.resources | nindent 12 }}
+        env:
+          {{- include "agent-service.commonEnv" . | nindent 12 }}
+        envFrom:
+        {{- if .Values.configMap.enabled }}
+        - configMapRef:
+            name: {{ include "agent-service.configMapName" . }}
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - secretRef:
+            name: {{ include "agent-service.secretName" . }}
+        {{- end }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+{{- end }}

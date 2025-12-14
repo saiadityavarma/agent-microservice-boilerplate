@@ -1,0 +1,241 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-service.fullname" . }}-worker
+  labels:
+    {{- include "agent-service.workerLabels" . | nindent 4 }}
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "agent-service.workerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "agent-service.workerSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "agent-service.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "agent-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: worker
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: {{ include "agent-service.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - celery
+          - -A
+          - src.core.celery_app
+          - worker
+          - --loglevel=info
+          - --concurrency={{ .Values.worker.concurrency }}
+          - -Q
+          - default,agents,priority
+        {{- if .Values.worker.livenessProbe }}
+        livenessProbe:
+          {{- toYaml .Values.worker.livenessProbe | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.worker.resources | nindent 12 }}
+        env:
+          {{- include "agent-service.commonEnv" . | nindent 12 }}
+          - name: CELERY_CONCURRENCY
+            value: {{ .Values.worker.concurrency | quote }}
+          {{- with .Values.worker.env }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
+        envFrom:
+        {{- if .Values.configMap.enabled }}
+        - configMapRef:
+            name: {{ include "agent-service.configMapName" . }}
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - secretRef:
+            name: {{ include "agent-service.secretName" . }}
+        {{- end }}
+        {{- with .Values.worker.envFrom }}
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          mountPath: {{ .Values.persistence.mountPath }}
+        {{- end }}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      {{- if .Values.persistence.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "agent-service.fullname" . }}-data
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+{{- end }}
+---
+{{- if .Values.beat.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-service.fullname" . }}-beat
+  labels:
+    {{- include "agent-service.beatLabels" . | nindent 4 }}
+spec:
+  replicas: 1  # Beat scheduler should only have 1 replica
+  selector:
+    matchLabels:
+      {{- include "agent-service.beatSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "agent-service.beatSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "agent-service.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "agent-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: beat
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: {{ include "agent-service.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - celery
+          - -A
+          - src.core.celery_app
+          - beat
+          - --loglevel=info
+        resources:
+          {{- toYaml .Values.beat.resources | nindent 12 }}
+        env:
+          {{- include "agent-service.commonEnv" . | nindent 12 }}
+          {{- with .Values.beat.env }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
+        envFrom:
+        {{- if .Values.configMap.enabled }}
+        - configMapRef:
+            name: {{ include "agent-service.configMapName" . }}
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - secretRef:
+            name: {{ include "agent-service.secretName" . }}
+        {{- end }}
+        {{- with .Values.beat.envFrom }}
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+{{- end }}
+---
+{{- if .Values.flower.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-service.fullname" . }}-flower
+  labels:
+    {{- include "agent-service.flowerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.flower.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agent-service.flowerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "agent-service.flowerSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "agent-service.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "agent-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: flower
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: {{ include "agent-service.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - celery
+          - -A
+          - src.core.celery_app
+          - flower
+          - --port=5555
+        ports:
+        - name: flower
+          containerPort: 5555
+          protocol: TCP
+        resources:
+          {{- toYaml .Values.flower.resources | nindent 12 }}
+        env:
+          {{- include "agent-service.commonEnv" . | nindent 12 }}
+          {{- with .Values.flower.env }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
+        envFrom:
+        {{- if .Values.configMap.enabled }}
+        - configMapRef:
+            name: {{ include "agent-service.configMapName" . }}
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - secretRef:
+            name: {{ include "agent-service.secretName" . }}
+        {{- end }}
+        {{- with .Values.flower.envFrom }}
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+{{- end }}

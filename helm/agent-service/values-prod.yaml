@@ -1,0 +1,226 @@
+# Production environment values
+global:
+  environment: production
+  domain: example.com
+
+image:
+  tag: "" # Set by CI/CD - use semantic version tags
+  pullPolicy: IfNotPresent
+
+api:
+  replicaCount: 3
+
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 3
+
+worker:
+  replicaCount: 5
+  concurrency: 8
+
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+    requests:
+      cpu: 2000m
+      memory: 2Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 50
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+    # Example custom metric for queue depth
+    customMetrics:
+      - type: External
+        external:
+          metric:
+            name: celery_queue_length
+            selector:
+              matchLabels:
+                queue_name: default
+          target:
+            type: AverageValue
+            averageValue: "30"
+
+beat:
+  enabled: true
+
+flower:
+  enabled: false  # Disable in prod or secure properly
+
+service:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: agent-service-prod-tls
+      hosts:
+        - api.example.com
+
+configMap:
+  data:
+    APP_NAME: "agent-service"
+    LOG_LEVEL: "INFO"
+    LOG_FORMAT: "json"
+    TRACING_SAMPLE_RATE: "0.1"
+    CORS_ORIGINS: '["https://app.example.com"]'
+    METRICS_ENABLED: "true"
+
+secret:
+  enabled: true
+  useExisting: true
+  existingSecretName: "agent-service-prod-secrets"
+
+externalSecrets:
+  enabled: true
+  backend: aws-secrets-manager
+  backendConfig:
+    region: us-east-1
+    secretName: agent-service/production
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+networkPolicy:
+  enabled: true
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  labels:
+    release: prometheus
+
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  size: 50Gi
+
+migration:
+  enabled: true
+  hook:
+    enabled: true
+    weight: "-5"
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - agent-service
+        - key: app.kubernetes.io/component
+          operator: In
+          values:
+          - api
+      topologyKey: kubernetes.io/hostname
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      preference:
+        matchExpressions:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+          - c6i.2xlarge
+          - c6i.4xlarge
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agent-service
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agent-service
+
+priorityClassName: "high-priority"
+
+# External services - managed separately
+redis:
+  enabled: false
+
+postgresql:
+  enabled: false

@@ -1,0 +1,351 @@
+# k8s/worker-deployment.yaml
+# Celery Worker Deployment
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-service-worker
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: worker
+    version: v1
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "Celery worker deployment for background task processing"
+spec:
+  replicas: 3
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: agent-service
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: agent-service
+        component: worker
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Security context for the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Service account for pod identity
+      serviceAccountName: agent-service
+      automountServiceAccountToken: true
+
+      # Topology spread for high availability
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: agent-service
+              component: worker
+
+      # Anti-affinity to spread workers across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - agent-service
+                    - key: component
+                      operator: In
+                      values:
+                        - worker
+                topologyKey: kubernetes.io/hostname
+
+      # Init container to wait for dependencies
+      initContainers:
+        - name: wait-for-redis
+          image: redis:7-alpine
+          command: ['sh', '-c', 'until redis-cli -h $(REDIS_HOST) -p $(REDIS_PORT) ping; do echo waiting for redis; sleep 2; done;']
+          envFrom:
+            - configMapRef:
+                name: agent-service-config
+            - secretRef:
+                name: agent-service-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+      containers:
+        - name: worker
+          image: agent-service-worker:latest
+          imagePullPolicy: IfNotPresent
+
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+          # Command override for worker
+          command:
+            - celery
+            - -A
+            - agent_service.tasks.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+            - --max-tasks-per-child=1000
+            - --prefetch-multiplier=4
+
+          # Environment variables from ConfigMap and Secret
+          envFrom:
+            - configMapRef:
+                name: agent-service-config
+            - secretRef:
+                name: agent-service-secrets
+
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CELERY_WORKER_NAME
+              value: "$(POD_NAME)"
+
+          # Resource requests and limits
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+              ephemeral-storage: 1Gi
+
+          # Liveness probe (check if worker is responsive)
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - agent_service.tasks.celery_app
+                - inspect
+                - ping
+                - -d
+                - celery@$(POD_NAME)
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+
+          # Volume mounts
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /app/.cache
+
+      # Volumes
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 512Mi
+
+      # DNS configuration
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+
+      # Termination grace period (allow workers to finish current tasks)
+      terminationGracePeriodSeconds: 60
+
+---
+# Celery Beat Deployment (Scheduler)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-service-beat
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: beat
+    version: v1
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: beat
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "Celery beat scheduler for periodic tasks"
+spec:
+  # Only 1 beat scheduler should run
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate  # Only one beat should run at a time
+  selector:
+    matchLabels:
+      app: agent-service
+      component: beat
+  template:
+    metadata:
+      labels:
+        app: agent-service
+        component: beat
+        version: v1
+    spec:
+      # Security context for the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      serviceAccountName: agent-service
+
+      # Init container to wait for Redis
+      initContainers:
+        - name: wait-for-redis
+          image: redis:7-alpine
+          command: ['sh', '-c', 'until redis-cli -h $(REDIS_HOST) -p $(REDIS_PORT) ping; do echo waiting for redis; sleep 2; done;']
+          envFrom:
+            - configMapRef:
+                name: agent-service-config
+            - secretRef:
+                name: agent-service-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+      containers:
+        - name: beat
+          image: agent-service-worker:latest
+          imagePullPolicy: IfNotPresent
+
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+          # Command override for beat
+          command:
+            - celery
+            - -A
+            - agent_service.tasks.celery_app
+            - beat
+            - --loglevel=info
+            - --pidfile=/tmp/celerybeat.pid
+            - --schedule=/tmp/celerybeat-schedule
+
+          # Environment variables
+          envFrom:
+            - configMapRef:
+                name: agent-service-config
+            - secretRef:
+                name: agent-service-secrets
+
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          # Resource requests and limits (beat is lightweight)
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 512Mi
+
+          # Liveness probe
+          livenessProbe:
+            exec:
+              command:
+                - test
+                - -f
+                - /tmp/celerybeat.pid
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Volume mounts
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: beat-schedule
+              mountPath: /app/schedule
+
+      # Volumes
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: beat-schedule
+          emptyDir:
+            sizeLimit: 128Mi
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

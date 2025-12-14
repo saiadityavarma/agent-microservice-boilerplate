@@ -1,0 +1,132 @@
+# Staging environment values
+global:
+  environment: staging
+  domain: staging.example.com
+
+image:
+  tag: "" # Set by CI/CD
+  pullPolicy: IfNotPresent
+
+api:
+  replicaCount: 2
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+worker:
+  replicaCount: 2
+  concurrency: 4
+
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75
+
+beat:
+  enabled: true
+
+flower:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+  hosts:
+    - host: api-staging.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: agent-service-staging-tls
+      hosts:
+        - api-staging.example.com
+
+configMap:
+  data:
+    APP_NAME: "agent-service-staging"
+    LOG_LEVEL: "INFO"
+    TRACING_SAMPLE_RATE: "0.5"
+    CORS_ORIGINS: '["https://app-staging.example.com"]'
+
+secret:
+  enabled: true
+  useExisting: true
+  existingSecretName: "agent-service-staging-secrets"
+
+externalSecrets:
+  enabled: true
+  backend: aws-secrets-manager
+  backendConfig:
+    region: us-east-1
+    secretName: agent-service/staging
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+persistence:
+  enabled: true
+  size: 10Gi
+
+migration:
+  enabled: true
+  hook:
+    enabled: true
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - agent-service
+        topologyKey: kubernetes.io/hostname
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agent-service
+
+# External services - not deployed as dependencies
+redis:
+  enabled: false
+
+postgresql:
+  enabled: false

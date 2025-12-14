@@ -1,0 +1,11 @@
+# Test dependencies - includes dev + additional test tools
+# Install with: pip install -e ".[dev]"
+# Or install from this file: pip install -r requirements/test.txt
+
+-r dev.txt
+
+# Additional testing tools not in dev extras
+httpx-mock>=0.1.0  # HTTP mocking for tests
+pytest-mock>=3.12.0  # Enhanced mocking
+pytest-timeout>=2.2.0  # Test timeouts
+coverage[toml]>=7.3.0  # Coverage reporting with TOML support

@@ -1,0 +1,14 @@
+# k8s/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-service
+  labels:
+    name: agent-service
+    environment: production
+    team: platform
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: namespace
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "AI Agent Service namespace for production workloads"

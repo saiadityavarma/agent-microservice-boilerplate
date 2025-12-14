@@ -1,0 +1,147 @@
+# k8s/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-service-api-hpa
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: api
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-service-api
+  minReplicas: 2
+  maxReplicas: 10
+
+  # Scaling behavior configuration
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 minutes
+      policies:
+        - type: Percent
+          value: 50  # Scale down by 50% of current pods
+          periodSeconds: 60
+        - type: Pods
+          value: 1  # Or remove 1 pod at a time
+          periodSeconds: 60
+      selectPolicy: Min  # Use the policy that scales down the least
+
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately
+      policies:
+        - type: Percent
+          value: 100  # Double the number of pods
+          periodSeconds: 30
+        - type: Pods
+          value: 2  # Or add 2 pods at a time
+          periodSeconds: 30
+      selectPolicy: Max  # Use the policy that scales up the most
+
+  metrics:
+    # CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # Target 70% CPU utilization
+
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80  # Target 80% memory utilization
+
+    # Custom metric: Request rate (requires metrics server and custom metrics)
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "1000"  # Scale when requests > 1000/s per pod
+
+    # Custom metric: Queue length for async processing
+    # - type: External
+    #   external:
+    #     metric:
+    #       name: celery_queue_length
+    #       selector:
+    #         matchLabels:
+    #           queue: default
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "100"  # Scale when queue > 100 items per pod
+
+---
+# HPA for Celery workers based on queue depth
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-service-worker-hpa
+  namespace: agent-service
+  labels:
+    app: agent-service
+    component: worker
+    app.kubernetes.io/name: agent-service
+    app.kubernetes.io/component: worker-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-service-worker
+  minReplicas: 2
+  maxReplicas: 10
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Min
+
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+      selectPolicy: Max
+
+  metrics:
+    # CPU-based scaling for workers
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+    # Custom metric: Celery queue depth (requires custom metrics adapter)
+    # Uncomment when custom metrics are configured
+    # - type: External
+    #   external:
+    #     metric:
+    #       name: celery_queue_depth
+    #       selector:
+    #         matchLabels:
+    #           queue: celery
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "50"  # Scale when queue depth > 50 per worker

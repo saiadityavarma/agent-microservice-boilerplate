@@ -1,0 +1,431 @@
+# Default values for agent-service
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global configuration
+global:
+  environment: development
+  domain: example.com
+  imageRegistry: ""
+
+# Application metadata
+nameOverride: ""
+fullnameOverride: ""
+
+# Image configuration
+image:
+  registry: docker.io
+  repository: your-org/agent-service
+  pullPolicy: IfNotPresent
+  tag: "" # Overrides the image tag whose default is the chart appVersion.
+
+imagePullSecrets: []
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+# Pod labels
+podLabels: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+
+# API Service configuration
+api:
+  enabled: true
+  replicaCount: 2
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+  # Autoscaling
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  # Liveness probe
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  # Readiness probe
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 3
+
+  # Environment variables
+  env:
+    - name: APP_ENV
+      value: "production"
+    - name: LOG_LEVEL
+      value: "INFO"
+    - name: WORKERS
+      value: "4"
+
+  # Environment from ConfigMap/Secret
+  envFrom: []
+
+# Worker configuration
+worker:
+  enabled: true
+  replicaCount: 2
+
+  # Worker type: celery, beat, flower
+  type: celery
+
+  # Celery concurrency
+  concurrency: 4
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Autoscaling for workers
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 85
+    # Custom metrics for queue depth
+    customMetrics: []
+
+  # Liveness probe for worker
+  livenessProbe:
+    exec:
+      command:
+        - celery
+        - -A
+        - src.core.celery_app
+        - inspect
+        - ping
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  # Environment variables
+  env:
+    - name: CELERY_WORKER_PREFETCH_MULTIPLIER
+      value: "4"
+    - name: CELERY_WORKER_MAX_TASKS_PER_CHILD
+      value: "1000"
+
+  # Environment from ConfigMap/Secret
+  envFrom: []
+
+# Celery Beat (scheduler) configuration
+beat:
+  enabled: false
+  replicaCount: 1
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  env: []
+  envFrom: []
+
+# Celery Flower (monitoring) configuration
+flower:
+  enabled: false
+  replicaCount: 1
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  service:
+    type: ClusterIP
+    port: 5555
+
+  env: []
+  envFrom: []
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: agent-service-tls
+      hosts:
+        - api.example.com
+
+# ConfigMap configuration
+configMap:
+  enabled: true
+  data:
+    # Application configuration
+    APP_NAME: "agent-service"
+    APP_VERSION: "1.0.0"
+
+    # API configuration
+    API_V1_PREFIX: "/api/v1"
+    API_V2_PREFIX: "/api/v2"
+    CORS_ORIGINS: '["*"]'
+
+    # Logging
+    LOG_FORMAT: "json"
+    LOG_LEVEL: "INFO"
+
+    # Metrics
+    METRICS_ENABLED: "true"
+    METRICS_PORT: "8000"
+
+    # Tracing
+    TRACING_ENABLED: "true"
+    TRACING_SAMPLE_RATE: "0.1"
+
+# Secret configuration
+# Note: Use external-secrets operator or sealed-secrets in production
+secret:
+  enabled: true
+  # Set to true to use existing secret
+  useExisting: false
+  existingSecretName: ""
+
+  # Secret data (base64 encoded in templates)
+  data:
+    DATABASE_URL: "postgresql://user:pass@postgres:5432/agentdb"
+    REDIS_URL: "redis://redis:6379/0"
+    CELERY_BROKER_URL: "redis://redis:6379/0"
+    CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+    SECRET_KEY: "change-me-in-production"
+    SENTRY_DSN: ""
+    ANTHROPIC_API_KEY: ""
+
+# External Secrets Operator integration
+externalSecrets:
+  enabled: false
+  backend: aws-secrets-manager
+  # Backend configuration
+  backendConfig:
+    region: us-east-1
+    secretName: agent-service/production
+
+  # Secret mappings
+  secretMappings:
+    - key: DATABASE_URL
+      property: database_url
+    - key: REDIS_URL
+      property: redis_url
+    - key: SECRET_KEY
+      property: secret_key
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Network Policy
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: ingress-nginx
+      ports:
+      - protocol: TCP
+        port: 8000
+
+  egress:
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: TCP
+        port: 5432  # PostgreSQL
+      - protocol: TCP
+        port: 6379  # Redis
+      - protocol: TCP
+        port: 443   # HTTPS
+      - protocol: TCP
+        port: 53    # DNS
+      - protocol: UDP
+        port: 53    # DNS
+
+# Persistence for temporary files
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  mountPath: /tmp
+
+# Init containers
+initContainers: []
+# - name: migration
+#   image: your-org/agent-service:latest
+#   command: ["alembic", "upgrade", "head"]
+
+# Sidecar containers
+sidecars: []
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - agent-service
+        topologyKey: kubernetes.io/hostname
+
+# Priority class
+priorityClassName: ""
+
+# Pod topology spread constraints
+topologySpreadConstraints: []
+# - maxSkew: 1
+#   topologyKey: topology.kubernetes.io/zone
+#   whenUnsatisfiable: DoNotSchedule
+#   labelSelector:
+#     matchLabels:
+#       app: agent-service
+
+# Service Monitor for Prometheus Operator
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  honorLabels: true
+
+# Database migration job
+migration:
+  enabled: true
+
+  # Run before deployment
+  hook:
+    enabled: true
+    weight: "-5"
+    deletePolicy: before-hook-creation
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+
+# Redis dependency
+redis:
+  enabled: false
+  # If enabled, use Redis subchart
+  architecture: standalone
+  auth:
+    enabled: true
+    password: "changeme"
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# PostgreSQL dependency
+postgresql:
+  enabled: false
+  # If enabled, use PostgreSQL subchart
+  auth:
+    username: agentuser
+    password: "changeme"
+    database: agentdb
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# Extra manifests to deploy
+extraManifests: []

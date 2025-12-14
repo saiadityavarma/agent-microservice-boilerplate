@@ -1,0 +1,380 @@
+groups:
+  - name: agent-service-alerts
+    interval: 30s
+    rules:
+      # API Availability Alerts
+      - alert: AgentServiceDown
+        expr: up{job="agent-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Agent Service is down"
+          description: "Agent Service has been down for more than 2 minutes. Instance: {{ $labels.instance }}"
+
+      - alert: AgentServiceHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="agent-service",status=~"5.."}[5m])) /
+            sum(rate(http_requests_total{job="agent-service"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "High error rate detected in Agent Service"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: AgentServiceHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="agent-service"}[5m])) by (le, endpoint)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High latency detected in Agent Service"
+          description: "95th percentile latency is {{ $value }}s for endpoint {{ $labels.endpoint }}"
+
+      - alert: AgentServiceVeryHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="agent-service"}[5m])) by (le, endpoint)
+          ) > 5
+        for: 5m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Very high latency detected in Agent Service"
+          description: "95th percentile latency is {{ $value }}s for endpoint {{ $labels.endpoint }}"
+
+      # Resource Usage Alerts
+      - alert: AgentServiceHighCPU
+        expr: |
+          rate(container_cpu_usage_seconds_total{
+            pod=~"agent-service-.*",
+            namespace="production"
+          }[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High CPU usage in Agent Service"
+          description: "CPU usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+
+      - alert: AgentServiceHighMemory
+        expr: |
+          (
+            container_memory_working_set_bytes{
+              pod=~"agent-service-.*",
+              namespace="production"
+            } /
+            container_spec_memory_limit_bytes{
+              pod=~"agent-service-.*",
+              namespace="production"
+            }
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High memory usage in Agent Service"
+          description: "Memory usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+
+      - alert: AgentServiceOOMKilled
+        expr: |
+          increase(kube_pod_container_status_terminated_reason{
+            reason="OOMKilled",
+            pod=~"agent-service-.*"
+          }[5m]) > 0
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Agent Service pod was OOM killed"
+          description: "Pod {{ $labels.pod }} was killed due to out of memory"
+
+      # Pod Health Alerts
+      - alert: AgentServicePodRestartingFrequently
+        expr: |
+          rate(kube_pod_container_status_restarts_total{
+            pod=~"agent-service-.*",
+            namespace="production"
+          }[15m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "Agent Service pod restarting frequently"
+          description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last 15 minutes"
+
+      - alert: AgentServicePodNotReady
+        expr: |
+          kube_pod_status_phase{
+            pod=~"agent-service-.*",
+            namespace="production",
+            phase!="Running"
+          } > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "Agent Service pod not ready"
+          description: "Pod {{ $labels.pod }} is in phase {{ $labels.phase }}"
+
+      - alert: AgentServiceReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas{
+            deployment=~"agent-service-.*",
+            namespace="production"
+          } !=
+          kube_deployment_status_replicas_available{
+            deployment=~"agent-service-.*",
+            namespace="production"
+          }
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "Agent Service replicas mismatch"
+          description: "Deployment {{ $labels.deployment }} has {{ $value }} replicas mismatch"
+
+  - name: celery-worker-alerts
+    interval: 30s
+    rules:
+      # Celery Worker Alerts
+      - alert: CeleryWorkerDown
+        expr: |
+          celery_workers_active{job="agent-service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "No Celery workers are running"
+          description: "All Celery workers have been down for 5 minutes"
+
+      - alert: CeleryHighQueueDepth
+        expr: |
+          celery_queue_length{queue="default"} > 1000
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "High Celery queue depth"
+          description: "Queue {{ $labels.queue }} has {{ $value }} tasks pending"
+
+      - alert: CeleryVeryHighQueueDepth
+        expr: |
+          celery_queue_length{queue="default"} > 5000
+        for: 5m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "Very high Celery queue depth"
+          description: "Queue {{ $labels.queue }} has {{ $value }} tasks pending - workers may be overwhelmed"
+
+      - alert: CeleryTaskFailureRate
+        expr: |
+          (
+            sum(rate(celery_task_failed_total[5m])) /
+            sum(rate(celery_task_total[5m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "High Celery task failure rate"
+          description: "Task failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: CeleryTaskProcessingTime
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(celery_task_runtime_seconds_bucket[5m])) by (le, task)
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Slow Celery task processing"
+          description: "95th percentile processing time is {{ $value }}s for task {{ $labels.task }}"
+
+      - alert: CeleryWorkerHighCPU
+        expr: |
+          rate(container_cpu_usage_seconds_total{
+            pod=~"agent-service-worker-.*",
+            namespace="production"
+          }[5m]) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "High CPU usage in Celery worker"
+          description: "CPU usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+
+      - alert: CeleryWorkerHighMemory
+        expr: |
+          (
+            container_memory_working_set_bytes{
+              pod=~"agent-service-worker-.*",
+              namespace="production"
+            } /
+            container_spec_memory_limit_bytes{
+              pod=~"agent-service-worker-.*",
+              namespace="production"
+            }
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "High memory usage in Celery worker"
+          description: "Memory usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+
+  - name: database-alerts
+    interval: 30s
+    rules:
+      # Database Connection Alerts
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          (
+            sqlalchemy_pool_size{job="agent-service"} -
+            sqlalchemy_pool_checked_in{job="agent-service"}
+          ) / sqlalchemy_pool_size{job="agent-service"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Connection pool utilization is {{ $value | humanizePercentage }}"
+
+      - alert: HighDatabaseQueryLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(database_query_duration_seconds_bucket{job="agent-service"}[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High database query latency"
+          description: "95th percentile query latency is {{ $value }}s"
+
+      - alert: DatabaseConnectionErrors
+        expr: |
+          rate(database_connection_errors_total{job="agent-service"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Database connection errors detected"
+          description: "Connection error rate is {{ $value }} per second"
+
+  - name: redis-alerts
+    interval: 30s
+    rules:
+      # Redis Alerts
+      - alert: RedisDown
+        expr: |
+          redis_up{job="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance {{ $labels.instance }} has been down for 2 minutes"
+
+      - alert: RedisHighMemoryUsage
+        expr: |
+          (redis_memory_used_bytes / redis_memory_max_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: RedisConnectionsExhausted
+        expr: |
+          (redis_connected_clients / redis_config_maxclients) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis connections nearly exhausted"
+          description: "Redis connections at {{ $value | humanizePercentage }} of maximum"
+
+  - name: agent-business-logic-alerts
+    interval: 30s
+    rules:
+      # Agent-specific Business Logic Alerts
+      - alert: HighAgentInvocationFailureRate
+        expr: |
+          (
+            sum(rate(agent_invocation_failed_total[5m])) /
+            sum(rate(agent_invocation_total[5m]))
+          ) > 0.15
+        for: 10m
+        labels:
+          severity: warning
+          component: agent
+        annotations:
+          summary: "High agent invocation failure rate"
+          description: "Agent failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: SlowAgentResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(agent_response_time_seconds_bucket[5m])) by (le, agent_type)
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: agent
+        annotations:
+          summary: "Slow agent response time"
+          description: "95th percentile response time is {{ $value }}s for agent type {{ $labels.agent_type }}"
+
+      - alert: HighToolInvocationRate
+        expr: |
+          sum(rate(tool_invocation_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: info
+          component: agent
+        annotations:
+          summary: "High tool invocation rate"
+          description: "Tool invocation rate is {{ $value }} per second - may indicate high load"
+
+      - alert: ExternalAPIRateLimitApproaching
+        expr: |
+          rate_limit_remaining{service="anthropic"} < 100
+        for: 2m
+        labels:
+          severity: warning
+          component: external-api
+        annotations:
+          summary: "External API rate limit approaching"
+          description: "Only {{ $value }} requests remaining for {{ $labels.service }}"

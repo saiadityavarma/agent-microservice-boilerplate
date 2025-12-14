@@ -1,0 +1,59 @@
+# docker/Dockerfile.worker
+# Celery worker and beat Dockerfile
+
+# Base stage with common dependencies
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Builder stage for worker
+FROM base AS builder
+RUN uv sync --frozen --no-dev
+
+# Worker production stage
+FROM python:3.11-slim AS worker
+
+# Security labels for image scanning and metadata
+LABEL org.opencontainers.image.title="agent-service-worker" \
+      org.opencontainers.image.description="Celery worker for AI Agent Service background tasks" \
+      org.opencontainers.image.vendor="Your Organization" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.source="https://github.com/yourorg/agent-service" \
+      org.opencontainers.image.licenses="MIT" \
+      security.scan.enabled="true" \
+      security.scan.level="production"
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY src/ src/
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    C_FORCE_ROOT=false
+
+# Create non-root user with specific UID/GID
+RUN groupadd -r -g 1001 celeryuser && \
+    useradd -r -u 1001 -g celeryuser -s /bin/false -d /app celeryuser && \
+    chown -R celeryuser:celeryuser /app
+
+USER celeryuser
+
+# Default command for Celery worker
+# Override with beat command in docker-compose or k8s for scheduler
+CMD ["celery", "-A", "agent_service.tasks.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+
+# Beat stage for scheduler
+FROM worker AS beat
+
+# Override entrypoint for beat scheduler
+CMD ["celery", "-A", "agent_service.tasks.celery_app", "beat", "--loglevel=info"]

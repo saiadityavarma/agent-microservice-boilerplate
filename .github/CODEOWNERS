@@ -1,0 +1,39 @@
+# CODEOWNERS
+# This file defines code ownership for the repository.
+# Users or teams mentioned here will automatically be requested for review
+# when a pull request modifies the files they own.
+#
+# Syntax: path/to/file @owner1 @owner2
+# More specific patterns override less specific ones (last match wins)
+
+# Default owners for everything in the repo
+* @org/team-leads
+
+# Authentication and security
+/src/agent_service/auth/ @org/security-team
+/src/agent_service/auth/**/* @org/security-team
+
+# API endpoints and contracts
+/src/agent_service/api/ @org/api-team
+/src/agent_service/api/**/* @org/api-team
+
+# Infrastructure and deployment
+/docker/ @org/platform-team
+/docker/**/* @org/platform-team
+/k8s/ @org/platform-team
+/k8s/**/* @org/platform-team
+/helm/ @org/platform-team
+/helm/**/* @org/platform-team
+*.dockerfile @org/platform-team
+Dockerfile @org/platform-team
+docker-compose*.yml @org/platform-team
+
+# Documentation
+/docs/ @org/docs-team
+/docs/**/* @org/docs-team
+*.md @org/docs-team
+README.md @org/docs-team
+
+# CI/CD configurations
+/.github/ @org/platform-team
+/.github/**/* @org/platform-team

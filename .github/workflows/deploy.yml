@@ -1,0 +1,339 @@
+name: Deploy to Kubernetes
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      version:
+        description: 'Version/tag to deploy'
+        required: true
+        type: string
+
+env:
+  HELM_VERSION: v3.13.0
+  KUBECTL_VERSION: v1.28.0
+
+jobs:
+  determine-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      version: ${{ steps.set-version.outputs.version }}
+
+    steps:
+      - name: Set environment based on branch
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ inputs.environment }}"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            ENV="staging"
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            ENV="dev"
+          else
+            ENV="dev"
+          fi
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "Deploying to: $ENV"
+
+      - name: Set version
+        id: set-version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            # Get version from build workflow or use SHA
+            VERSION="${GITHUB_SHA::8}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Deploying version: $VERSION"
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.environment == 'dev'
+    environment:
+      name: development
+      url: https://api-dev.example.com
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name dev-cluster --region us-east-1
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install agent-service ./helm/agent-service \
+            --namespace dev \
+            --create-namespace \
+            --values ./helm/agent-service/values-dev.yaml \
+            --set image.tag=${{ needs.determine-environment.outputs.version }} \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/agent-service-api -n dev
+          kubectl rollout status deployment/agent-service-worker -n dev
+
+      - name: Run smoke tests
+        run: |
+          kubectl run smoke-test --image=curlimages/curl:latest --rm -i --restart=Never -n dev -- \
+            curl -f http://agent-service.dev.svc.cluster.local/health || exit 1
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.environment == 'staging'
+    environment:
+      name: staging
+      url: https://api-staging.example.com
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name staging-cluster --region us-east-1
+
+      - name: Helm diff
+        run: |
+          helm plugin install https://github.com/databus23/helm-diff || true
+          helm diff upgrade agent-service ./helm/agent-service \
+            --namespace staging \
+            --values ./helm/agent-service/values-staging.yaml \
+            --set image.tag=${{ needs.determine-environment.outputs.version }} || true
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install agent-service ./helm/agent-service \
+            --namespace staging \
+            --create-namespace \
+            --values ./helm/agent-service/values-staging.yaml \
+            --set image.tag=${{ needs.determine-environment.outputs.version }} \
+            --wait \
+            --timeout 15m \
+            --atomic
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/agent-service-api -n staging --timeout=10m
+          kubectl rollout status deployment/agent-service-worker -n staging --timeout=10m
+
+      - name: Run smoke tests
+        run: |
+          # Health check
+          kubectl run smoke-test-health --image=curlimages/curl:latest --rm -i --restart=Never -n staging -- \
+            curl -f http://agent-service.staging.svc.cluster.local/health
+
+          # API test
+          kubectl run smoke-test-api --image=curlimages/curl:latest --rm -i --restart=Never -n staging -- \
+            curl -f http://agent-service.staging.svc.cluster.local/api/v1/health
+
+      - name: Notify deployment
+        if: success()
+        run: |
+          echo "Successfully deployed version ${{ needs.determine-environment.outputs.version }} to staging"
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.environment == 'prod'
+    environment:
+      name: production
+      url: https://api.example.com
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name prod-cluster --region us-east-1
+
+      - name: Helm diff
+        run: |
+          helm plugin install https://github.com/databus23/helm-diff || true
+          helm diff upgrade agent-service ./helm/agent-service \
+            --namespace production \
+            --values ./helm/agent-service/values-prod.yaml \
+            --set image.tag=${{ needs.determine-environment.outputs.version }}
+
+      - name: Backup current release
+        run: |
+          kubectl get all -n production -o yaml > backup-${{ github.run_number }}.yaml
+
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-deployment-backup
+          path: backup-${{ github.run_number }}.yaml
+
+      - name: Deploy with Helm (Canary)
+        run: |
+          # Deploy with canary strategy - start with 25% traffic
+          helm upgrade --install agent-service ./helm/agent-service \
+            --namespace production \
+            --create-namespace \
+            --values ./helm/agent-service/values-prod.yaml \
+            --set image.tag=${{ needs.determine-environment.outputs.version }} \
+            --set api.replicaCount=3 \
+            --wait \
+            --timeout 20m \
+            --atomic
+
+      - name: Verify deployment health
+        run: |
+          kubectl rollout status deployment/agent-service-api -n production --timeout=15m
+          kubectl rollout status deployment/agent-service-worker -n production --timeout=15m
+
+          # Wait for pods to be ready
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=api -n production --timeout=300s
+
+      - name: Run comprehensive smoke tests
+        run: |
+          # Health check
+          for i in {1..5}; do
+            kubectl run smoke-test-health-$i --image=curlimages/curl:latest --rm -i --restart=Never -n production -- \
+              curl -f http://agent-service.production.svc.cluster.local/health && break || sleep 10
+          done
+
+          # Metrics check
+          kubectl run smoke-test-metrics --image=curlimages/curl:latest --rm -i --restart=Never -n production -- \
+            curl -f http://agent-service.production.svc.cluster.local/metrics
+
+          # API readiness
+          kubectl run smoke-test-ready --image=curlimages/curl:latest --rm -i --restart=Never -n production -- \
+            curl -f http://agent-service.production.svc.cluster.local/health/ready
+
+      - name: Monitor error rates
+        run: |
+          echo "Monitoring error rates for 5 minutes..."
+          sleep 300
+
+          # Check if error rate is acceptable (implement your own logic)
+          ERROR_RATE=$(kubectl logs -l app.kubernetes.io/component=api -n production --tail=1000 | grep -i error | wc -l)
+          if [ $ERROR_RATE -gt 10 ]; then
+            echo "Error rate too high: $ERROR_RATE errors detected"
+            exit 1
+          fi
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed, rolling back..."
+          helm rollback agent-service -n production
+          kubectl rollout status deployment/agent-service-api -n production
+          kubectl rollout status deployment/agent-service-worker -n production
+
+      - name: Notify production deployment
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "Production deployment successful!",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":rocket: *Production Deployment Successful*\n*Version*: ${{ needs.determine-environment.outputs.version }}\n*Deployed by*: ${{ github.actor }}\n*Commit*: ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  post-deployment:
+    name: Post-Deployment Tasks
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-dev, deploy-staging, deploy-prod]
+    if: always() && (needs.deploy-dev.result == 'success' || needs.deploy-staging.result == 'success' || needs.deploy-prod.result == 'success')
+
+    steps:
+      - name: Update deployment tracking
+        run: |
+          echo "Deployment completed for ${{ needs.determine-environment.outputs.environment }}"
+          echo "Version: ${{ needs.determine-environment.outputs.version }}"
+
+      - name: Trigger E2E tests
+        if: needs.determine-environment.outputs.environment != 'prod'
+        run: |
+          # Trigger E2E test workflow
+          echo "Triggering E2E tests for ${{ needs.determine-environment.outputs.environment }}"
