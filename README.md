@@ -33,13 +33,139 @@ Suddenly you need to figure out:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## Architecture Patterns
+
+This boilerplate implements battle-tested software architecture patterns that enable enterprise-grade agent deployments:
+
+### Clean Architecture / Hexagonal Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        API Layer                                 │
+│  (FastAPI routes, middleware, request/response handling)        │
+├─────────────────────────────────────────────────────────────────┤
+│                     Application Layer                            │
+│  (Agents, Tools, Business Logic, Use Cases)                     │
+├─────────────────────────────────────────────────────────────────┤
+│                       Domain Layer                               │
+│  (Interfaces, Models, Core Abstractions)                        │
+├─────────────────────────────────────────────────────────────────┤
+│                   Infrastructure Layer                           │
+│  (Database, Cache, External APIs, Observability)                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters**: Your agent code is isolated from infrastructure concerns. Swap databases, change auth providers, or migrate to different cloud - your agents don't change.
+
+### Key Patterns Implemented
+
+| Pattern | What It Does | Why You Care |
+|---------|--------------|--------------|
+| **Repository Pattern** | Abstracts database operations | Switch from PostgreSQL to MongoDB without touching business logic |
+| **Dependency Injection** | Services receive dependencies | Easy testing, swappable implementations |
+| **Interface Segregation** | Small, focused interfaces (`IAgent`, `ITool`, `IProtocolHandler`) | Implement only what you need |
+| **Decorator Pattern** | `@agent` and `@tool` decorators | Write 10 lines instead of 100 |
+| **Registry Pattern** | Auto-discovery of agents and tools | Add a file, it's automatically available |
+| **Strategy Pattern** | Pluggable auth providers | Same code works with Azure AD, Cognito, or API keys |
+| **Middleware Chain** | Request processing pipeline | Add logging, auth, rate limiting without changing handlers |
+
+---
+
+## Agent Communication Protocols
+
+This boilerplate supports three major protocols that enable agents to evolve from standalone scripts to interconnected services:
+
+### MCP (Model Context Protocol)
+
+**What**: Anthropic/Claude's protocol for context sharing between AI models and tools.
+
+**Use Case**: Integrate your agents with Claude Desktop, Claude.ai, or any MCP-compatible client.
+
+```
+┌──────────────┐      MCP       ┌──────────────┐
+│ Claude       │ ◄────────────► │ Your Agent   │
+│ Desktop      │   Context &    │ Service      │
+└──────────────┘   Tool Calls   └──────────────┘
+```
+
+**Endpoints**:
+- `GET /mcp/capabilities` - List available capabilities
+- `POST /mcp/invoke` - Invoke agent with MCP context
+- `POST /mcp/stream` - Stream agent response
+- `GET /mcp/tools` - List available tools
+
+### A2A (Agent-to-Agent Protocol)
+
+**What**: Protocol for agents to discover and collaborate with each other.
+
+**Use Case**: Build multi-agent systems where specialized agents delegate tasks.
+
+```
+┌──────────────┐      A2A       ┌──────────────┐
+│ Orchestrator │ ◄────────────► │ Weather      │
+│ Agent        │   Task Mgmt    │ Agent        │
+└──────────────┘                └──────────────┘
+        │              A2A             │
+        └──────────────────────────────┘
+                       │
+               ┌──────────────┐
+               │ Research     │
+               │ Agent        │
+               └──────────────┘
+```
+
+**Endpoints**:
+- `GET /a2a/discover` - Discover available agents
+- `POST /a2a/task/create` - Create a task for another agent
+- `GET /a2a/task/{id}` - Get task status
+- `GET /a2a/agents/{name}` - Get agent capabilities (Agent Card)
+
+### AG-UI (Agent-User Interface Protocol)
+
+**What**: Protocol for agents to return rich UI components, not just text.
+
+**Use Case**: Build interactive agent experiences with charts, forms, buttons.
+
+```
+┌──────────────┐     AG-UI     ┌──────────────┐
+│ Your App     │ ◄───────────► │ Agent        │
+│ (React/Vue)  │   UI Components│ Service      │
+└──────────────┘               └──────────────┘
+       ↓
+  ┌─────────────────────────────────┐
+  │  Card: Weather in London        │
+  │  ┌─────┐  ┌─────┐  ┌─────┐     │
+  │  │ 15°C│  │ 65% │  │ 🌤️  │     │
+  │  └─────┘  └─────┘  └─────┘     │
+  │  [Get 7-Day Forecast] [Share]  │
+  └─────────────────────────────────┘
+```
+
+**Endpoints**:
+- `POST /agui/invoke` - Invoke with UI components
+- `POST /agui/stream` - Stream with UI components
+- `POST /agui/action` - Handle UI actions (button clicks, form submits)
+
+### Enabling Protocols
+
+```bash
+# .env
+ENABLE_MCP=true
+ENABLE_A2A=true
+ENABLE_AGUI=true
+```
+
+---
+
 ## Quick Start (5 Minutes)
 
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/saiadityavarma/agents_boiler_plate.git
-cd agents_boiler_plate
+git clone https://github.com/saiadityavarma/agent-microservice-boilerplate.git
+cd agent-microservice-boilerplate
 
 # Create virtual environment
 python -m venv .venv
@@ -103,33 +229,55 @@ That's it! Your agent is now a production-ready API endpoint with authentication
 
 ---
 
-## Project Structure (What Goes Where)
+## Project Structure
 
 ```
-agents_boiler_plate/
+agent-microservice-boilerplate/
 ├── src/agent_service/
 │   ├── agent/                  # YOUR AGENTS GO HERE
-│   │   ├── decorators.py       # @agent decorator (don't edit)
-│   │   ├── context.py          # AgentContext (don't edit)
+│   │   ├── decorators.py       # @agent decorator
+│   │   ├── context.py          # AgentContext (db, cache, tools, secrets)
+│   │   ├── registry.py         # Auto-discovers agents
+│   │   ├── integrations/       # LangGraph, CrewAI adapters
 │   │   └── examples/           # ADD YOUR AGENTS HERE
-│   │       ├── my_agent.py     # Your custom agents
-│   │       └── ...
 │   │
 │   ├── tools/                  # YOUR TOOLS GO HERE
-│   │   ├── decorators.py       # @tool decorator (don't edit)
+│   │   ├── decorators.py       # @tool decorator
+│   │   ├── registry.py         # Auto-discovers tools
 │   │   └── examples/           # ADD YOUR TOOLS HERE
-│   │       ├── my_tool.py      # Your custom tools
-│   │       └── ...
 │   │
-│   ├── auth/                   # Authentication (pre-configured)
-│   ├── api/                    # REST API (pre-configured)
-│   ├── config/                 # Configuration (edit .env)
-│   └── infrastructure/         # Database, cache, etc. (pre-configured)
+│   ├── protocols/              # MCP, A2A, AG-UI implementations
+│   │   ├── mcp/                # Model Context Protocol
+│   │   ├── a2a/                # Agent-to-Agent
+│   │   └── agui/               # Agent-UI
+│   │
+│   ├── auth/                   # Authentication system
+│   │   ├── providers/          # Azure AD, AWS Cognito, API Keys
+│   │   ├── rbac/               # Role-based access control
+│   │   └── middleware.py       # Auth middleware
+│   │
+│   ├── api/                    # REST API
+│   │   ├── v1/                 # Versioned endpoints
+│   │   ├── middleware/         # Request ID, rate limiting, etc.
+│   │   └── routes/             # Route handlers
+│   │
+│   ├── infrastructure/         # Infrastructure services
+│   │   ├── database/           # SQLAlchemy, repositories
+│   │   ├── cache/              # Redis cache
+│   │   └── observability/      # Logging, metrics, tracing
+│   │
+│   └── interfaces/             # Core abstractions
+│       ├── agent.py            # IAgent interface
+│       ├── tool.py             # ITool interface
+│       └── protocol.py         # IProtocolHandler interface
 │
-├── .env                        # YOUR SECRETS AND CONFIG
-├── docker/                     # Docker setup (ready to use)
-├── helm/                       # Kubernetes deployment (ready to use)
-└── tests/                      # Test examples
+├── docker/                     # Docker configuration
+├── helm/                       # Kubernetes Helm charts
+├── k8s/                        # Raw Kubernetes manifests
+├── monitoring/                 # Prometheus, Grafana configs
+├── docs/                       # Documentation
+├── tests/                      # Test suite
+└── examples/                   # Example implementations
 ```
 
 ---
@@ -137,8 +285,6 @@ agents_boiler_plate/
 ## What Data Scientists Need to Edit
 
 ### 1. Your Agents (`src/agent_service/agent/examples/`)
-
-This is where your AI logic lives. Here's a real-world example:
 
 ```python
 from agent_service.agent.decorators import agent
@@ -163,31 +309,14 @@ async def qa_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
 
 ### 2. Your Tools (`src/agent_service/tools/examples/`)
 
-Tools are actions your agent can take:
-
 ```python
 from agent_service.tools.decorators import tool
 
 @tool(name="search_database", description="Search the product database")
 async def search_database(query: str, limit: int = 10) -> dict:
     """Search for products matching the query."""
-    # Your database logic here
     results = await db.search(query, limit=limit)
     return {"results": results, "count": len(results)}
-```
-
-Then use it in your agent:
-
-```python
-@agent(name="shopping_agent", description="Helps users find products")
-async def shopping_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
-    # Call your tool
-    results = await ctx.call_tool("search_database", {
-        "query": input.message,
-        "limit": 5
-    })
-
-    return AgentOutput(content=f"Found {results['count']} products...")
 ```
 
 ### 3. Environment Variables (`.env`)
@@ -208,144 +337,72 @@ AWS_COGNITO_REGION=us-east-1
 AWS_COGNITO_USER_POOL_ID=your-pool-id
 AWS_COGNITO_APP_CLIENT_ID=your-client-id
 
-# For API Keys (simplest option):
-# Just set AUTH_PROVIDER=api_key and create keys via /api/v1/auth/keys
+# Enable protocols
+ENABLE_MCP=true
+ENABLE_A2A=true
+ENABLE_AGUI=true
 
-# Your API keys for LLM providers
+# Your LLM API keys
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-
-# Optional: Redis for caching (recommended for production)
-REDIS_URL=redis://localhost:6379/0
 ```
 
 ### 4. That's It!
 
-Everything else is pre-configured:
-- Authentication middleware
-- Rate limiting
-- Request validation
-- Error handling
-- Logging and metrics
-- Database connections
-- Docker and Kubernetes configs
+Everything else is pre-configured.
 
 ---
 
 ## Common Agent Patterns
 
-### Pattern 1: Simple LLM Agent
-
+### Simple LLM Agent
 ```python
 @agent(name="chat", description="General chat agent")
 async def chat_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
     api_key = await ctx.get_secret("OPENAI_API_KEY")
     client = openai.AsyncOpenAI(api_key=api_key)
-
     response = await client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": input.message}]
     )
-
     return AgentOutput(content=response.choices[0].message.content)
 ```
 
-### Pattern 2: Tool-Using Agent
-
+### Tool-Using Agent
 ```python
 @agent(name="assistant", description="Agent with tools")
 async def assistant_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
-    # Decide which tool to use based on input
     if "weather" in input.message.lower():
         weather = await ctx.call_tool("get_weather", {"city": "NYC"})
         return AgentOutput(content=f"Weather: {weather}")
-
-    if "search" in input.message.lower():
-        results = await ctx.call_tool("web_search", {"query": input.message})
-        return AgentOutput(content=f"Found: {results}")
-
-    return AgentOutput(content="I can help with weather and search!")
+    return AgentOutput(content="I can help with weather!")
 ```
 
-### Pattern 3: RAG Agent (Retrieval-Augmented Generation)
-
+### RAG Agent
 ```python
 @agent(name="rag", description="Answers from your documents")
 async def rag_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
-    # 1. Search your vector database
-    docs = await ctx.call_tool("vector_search", {
-        "query": input.message,
-        "top_k": 5
-    })
-
-    # 2. Build context from retrieved docs
+    docs = await ctx.call_tool("vector_search", {"query": input.message, "top_k": 5})
     context = "\n".join([doc["content"] for doc in docs["results"]])
-
-    # 3. Generate answer with context
-    api_key = await ctx.get_secret("OPENAI_API_KEY")
-    client = openai.AsyncOpenAI(api_key=api_key)
-
-    response = await client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": f"Answer based on: {context}"},
-            {"role": "user", "content": input.message}
-        ]
-    )
-
-    return AgentOutput(content=response.choices[0].message.content)
-```
-
-### Pattern 4: Multi-Step Agent
-
-```python
-@agent(name="researcher", description="Multi-step research agent")
-async def researcher_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
-    ctx.logger.info(f"Starting research on: {input.message}")
-
-    # Step 1: Break down the question
-    subtopics = await analyze_question(input.message)
-
-    # Step 2: Research each subtopic
-    findings = []
-    for topic in subtopics:
-        result = await ctx.call_tool("web_search", {"query": topic})
-        findings.append(result)
-
-    # Step 3: Synthesize findings
-    summary = await synthesize_findings(findings)
-
-    return AgentOutput(
-        content=summary,
-        metadata={"subtopics_researched": len(subtopics)}
-    )
+    # Generate answer with context...
 ```
 
 ---
 
-## Using LangGraph, CrewAI, or Other Frameworks
+## Framework Integrations
 
-Already have agents built with a framework? Wrap them!
-
-### LangGraph Integration
-
+### LangGraph
 ```python
 from agent_service.agent.integrations.langgraph_adapter import langgraph_agent
-from your_langgraph_app import your_graph
 
 @langgraph_agent(name="my_langgraph_agent", graph=your_graph)
-async def langgraph_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
-    # The adapter handles running your graph
+async def lg_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
     pass
 ```
 
-### CrewAI Integration
-
+### CrewAI
 ```python
 from agent_service.agent.integrations.crewai_adapter import crewai_agent
-from crewai import Crew, Agent, Task
-
-my_crew = Crew(agents=[...], tasks=[...])
 
 @crewai_agent(name="my_crew", crew=my_crew)
 async def crew_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
@@ -354,96 +411,34 @@ async def crew_agent(input: AgentInput, ctx: AgentContext) -> AgentOutput:
 
 ---
 
-## Production Deployment Checklist
+## Authentication Options
 
-### Before You Deploy
-
-- [ ] Set `DEBUG=false` in `.env`
-- [ ] Configure your auth provider (Azure AD, AWS Cognito, or API keys)
-- [ ] Set strong `SECRET_KEY` (generate with `openssl rand -hex 32`)
-- [ ] Configure production database URL
-- [ ] Set up Redis for caching and rate limiting
-- [ ] Review rate limits in `config/settings.py`
-
-### Using Docker
-
-```bash
-# Build production image
-docker build -f docker/Dockerfile -t agent-service:latest .
-
-# Run with docker-compose
-docker-compose -f docker/docker-compose.yml up -d
-```
-
-### Using Kubernetes
-
-```bash
-# Deploy with Helm
-helm install agent-service ./helm/agent-service \
-  --values ./helm/agent-service/values-prod.yaml \
-  --set secrets.databaseUrl=$DATABASE_URL \
-  --set secrets.openaiApiKey=$OPENAI_API_KEY
-```
-
-### Monitoring
-
-- **Metrics**: Prometheus endpoint at `/metrics`
-- **Health**: `/health/live` and `/health/ready`
-- **Logs**: Structured JSON logs (configure your log aggregator)
-- **Tracing**: OpenTelemetry support (configure Jaeger/Zipkin)
+| Provider | Best For | Config |
+|----------|----------|--------|
+| **API Keys** | Internal tools, B2B | `AUTH_PROVIDER=api_key` |
+| **Azure AD** | Microsoft/Enterprise | `AUTH_PROVIDER=azure_ad` |
+| **AWS Cognito** | AWS ecosystem | `AUTH_PROVIDER=aws_cognito` |
 
 ---
 
-## Authentication Options
+## Production Deployment
 
-### Option 1: API Keys (Simplest)
-
-Best for: Internal tools, B2B integrations, getting started quickly.
-
+### Docker
 ```bash
-# In .env
-AUTH_PROVIDER=api_key
-
-# Create a key via API
-curl -X POST http://localhost:8000/api/v1/auth/keys \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My API Key", "scopes": ["read", "write"]}'
-
-# Use the key
-curl http://localhost:8000/api/v1/agents/my_agent/invoke \
-  -H "X-API-Key: sk_live_abc123..."
+docker build -f docker/Dockerfile -t agent-service:latest .
+docker-compose -f docker/docker-compose.yml up -d
 ```
 
-### Option 2: Azure AD
-
-Best for: Enterprise apps using Microsoft/Azure ecosystem.
-
+### Kubernetes
 ```bash
-# In .env
-AUTH_PROVIDER=azure_ad
-AZURE_AD_TENANT_ID=your-tenant-id
-AZURE_AD_CLIENT_ID=your-client-id
-
-# Client gets token from Azure AD, then:
-curl http://localhost:8000/api/v1/agents/my_agent/invoke \
-  -H "Authorization: Bearer <azure-ad-token>"
+helm install agent-service ./helm/agent-service \
+  --values ./helm/agent-service/values-prod.yaml
 ```
 
-### Option 3: AWS Cognito
-
-Best for: Apps in AWS ecosystem.
-
-```bash
-# In .env
-AUTH_PROVIDER=aws_cognito
-AWS_COGNITO_REGION=us-east-1
-AWS_COGNITO_USER_POOL_ID=us-east-1_xxxxx
-AWS_COGNITO_APP_CLIENT_ID=your-client-id
-
-# Client gets token from Cognito, then:
-curl http://localhost:8000/api/v1/agents/my_agent/invoke \
-  -H "Authorization: Bearer <cognito-token>"
-```
+### Monitoring
+- **Metrics**: `/metrics` (Prometheus)
+- **Health**: `/health/live`, `/health/ready`
+- **Tracing**: OpenTelemetry (Jaeger/Zipkin)
 
 ---
 
@@ -451,64 +446,24 @@ curl http://localhost:8000/api/v1/agents/my_agent/invoke \
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/agents` | GET | List all available agents |
-| `/api/v1/agents/{name}/invoke` | POST | Invoke an agent |
-| `/api/v1/agents/{name}/stream` | POST | Stream agent response |
-| `/api/v1/tools` | GET | List all available tools |
-| `/api/v1/auth/keys` | POST | Create API key |
-| `/api/v1/auth/keys` | GET | List your API keys |
+| `/api/v1/agents` | GET | List available agents |
+| `/api/v1/agents/{name}/invoke` | POST | Invoke agent |
+| `/api/v1/agents/{name}/stream` | POST | Stream response |
+| `/mcp/invoke` | POST | MCP protocol invoke |
+| `/a2a/discover` | GET | A2A agent discovery |
+| `/agui/invoke` | POST | AG-UI with components |
 | `/health/live` | GET | Liveness probe |
-| `/health/ready` | GET | Readiness probe |
 | `/metrics` | GET | Prometheus metrics |
-| `/docs` | GET | Swagger UI |
 
 ---
 
-## FAQ
+## Documentation
 
-### Q: Do I need to know FastAPI/SQLAlchemy/Docker?
-
-**No!** Just write your agents and tools in Python. The infrastructure is pre-configured.
-
-### Q: Can I use my existing LangChain/CrewAI agents?
-
-**Yes!** Use the framework adapters in `agent/integrations/`. See examples above.
-
-### Q: How do I add a new API endpoint?
-
-Add a new file in `src/agent_service/api/routes/` and register it in `api/app.py`. But for most cases, just creating a new agent automatically creates its endpoint.
-
-### Q: How do I connect to my own database?
-
-Update `DATABASE_URL` in `.env`. For additional models, add them in `domain/models.py`.
-
-### Q: How do I add custom middleware?
-
-Add to `src/agent_service/api/middleware/`. See existing middleware for examples.
-
-### Q: Where do logs go?
-
-By default, structured JSON to stdout. Configure your log aggregator (CloudWatch, Datadog, etc.) to collect from stdout.
-
-### Q: How do I run tests?
-
-```bash
-# All tests
-pytest
-
-# Just unit tests
-pytest tests/unit/
-
-# With coverage
-pytest --cov=agent_service
-```
-
----
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/saiadityavarma/agents_boiler_plate/issues)
-- **Documentation**: See `/docs` folder for detailed guides
+- [Quick Start](docs/quickstart.md)
+- [Creating Your First Agent](docs/first-agent.md)
+- [API Reference](docs/api/)
+- [Deployment Guide](docs/deployment.md)
+- [Protocol Reference](docs/api/protocols.md)
 
 ---
 
