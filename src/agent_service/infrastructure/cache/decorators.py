@@ -79,13 +79,13 @@ def _generate_cache_key(
         # Serialize and hash arguments
         try:
             arg_str = json.dumps(arg_dict, sort_keys=True, default=str)
-            arg_hash = hashlib.md5(arg_str.encode()).hexdigest()[:12]
+            arg_hash = hashlib.md5(arg_str.encode(), usedforsecurity=False).hexdigest()[:12]
             parts.append(arg_hash)
         except (TypeError, ValueError) as e:
             logger.warning(f"Failed to serialize arguments for cache key: {e}")
             # Fallback to string representation
             arg_str = str((args, sorted(kwargs.items())))
-            arg_hash = hashlib.md5(arg_str.encode()).hexdigest()[:12]
+            arg_hash = hashlib.md5(arg_str.encode(), usedforsecurity=False).hexdigest()[:12]
             parts.append(arg_hash)
 
     return ":".join(parts)
